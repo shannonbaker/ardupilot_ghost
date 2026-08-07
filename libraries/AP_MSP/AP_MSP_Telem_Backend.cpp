@@ -147,7 +147,7 @@ void AP_MSP_Telem_Backend::process_packet(uint8_t idx)
     };
     uint8_t *out_buf_head = reply.buf.ptr;
 
-    msp_process_out_command(msp_packet_type_map[idx], &reply.buf);
+    msp_process_out_command(msp_packet_type_map[idx], nullptr, &reply.buf);
     uint32_t len = reply.buf.ptr - &out_buf[0];
     sbuf_switch_to_reader(&reply.buf, out_buf_head); // change streambuf direction
     if (len > 0) {
@@ -435,7 +435,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_command(msp_packet_t *cmd, ms
     if (MSP2_IS_SENSOR_MESSAGE(cmd_msp)) {
         ret = msp_process_sensor_command(cmd_msp, src);
     } else {
-        ret = msp_process_out_command(cmd_msp, dst);
+        ret = msp_process_out_command(cmd_msp, src, dst);
     }
 
     // Process DONT_REPLY flag
@@ -447,9 +447,16 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_command(msp_packet_t *cmd, ms
     return ret;
 }
 
-MSPCommandResult AP_MSP_Telem_Backend::msp_process_out_command(uint16_t cmd_msp, sbuf_t *dst)
+MSPCommandResult AP_MSP_Telem_Backend::msp_process_out_command(uint16_t cmd_msp, sbuf_t *src, sbuf_t *dst)
 {
     switch (cmd_msp) {
+#if AP_MSP_GHOST_DP_ENABLED
+    case MSP_DISPLAYPORT:
+        if (src != nullptr && sbuf_bytes_remaining(src) > 0 && src->ptr[0] == 0x80) {
+            return msp_process_ghost_dp(src, dst);
+        }
+        return MSP_RESULT_ERROR;
+#endif
     case MSP_API_VERSION:
         return msp_process_out_api_version(dst);
     case MSP_FC_VARIANT:

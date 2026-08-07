@@ -15,3 +15,13 @@
 #ifndef HAL_WITH_MSP_DISPLAYPORT
 #define HAL_WITH_MSP_DISPLAYPORT HAL_MSP_ENABLED
 #endif
+
+// Native GHOST field subscriptions and mission transport over MSP DisplayPort.
+// This remains disabled unless explicitly selected by a custom build.
+#ifndef AP_MSP_GHOST_DP_ENABLED
+#define AP_MSP_GHOST_DP_ENABLED 0
+#endif
+
+#if AP_MSP_GHOST_DP_ENABLED && (!HAL_MSP_ENABLED || !HAL_WITH_MSP_DISPLAYPORT)
+#error "AP_MSP_GHOST_DP_ENABLED requires HAL_MSP_ENABLED and HAL_WITH_MSP_DISPLAYPORT"
+#endif

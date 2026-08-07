@@ -204,9 +204,12 @@ bool MSP::msp_parse_received_data(msp_port_t *msp, uint8_t c)
         if (msp->offset == sizeof(msp_header_v1_t)) {
             msp_header_v1_t * hdr = (msp_header_v1_t *)&msp->in_buf[0];
             // Check incoming buffer size limit
+#if MSP_PORT_INBUF_SIZE < UINT8_MAX
             if (hdr->size > MSP_PORT_INBUF_SIZE) {
                 msp->c_state = MSP_IDLE;
-            } else if (hdr->cmd == MSP_V2_FRAME_ID) {
+            } else
+#endif
+            if (hdr->cmd == MSP_V2_FRAME_ID) {
                 // MSPv1 payload must be big enough to hold V2 header + extra checksum
                 if (hdr->size >= sizeof(msp_header_v2_t) + 1) {
                     msp->msp_version = MSP_V2_OVER_V1;

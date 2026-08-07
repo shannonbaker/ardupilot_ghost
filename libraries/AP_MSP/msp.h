@@ -20,7 +20,11 @@
 // betaflight/src/main/msp/msp.h
 #define MSP_V2_FRAME_ID 255
 #define MSP_VERSION_MAGIC_INITIALIZER { 'M', 'M', 'X' }
+#if AP_MSP_GHOST_DP_ENABLED
+#define MSP_PORT_INBUF_SIZE 255
+#else
 #define MSP_PORT_INBUF_SIZE 192
+#endif
 #define MSP_PORT_OUTBUF_SIZE 512
 #define MSP_MAX_HEADER_SIZE     9
 // inav/src/main/msp/msp_protocol_v2_sensor.h

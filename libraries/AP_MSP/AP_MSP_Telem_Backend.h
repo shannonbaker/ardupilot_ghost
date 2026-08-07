@@ -173,7 +173,11 @@ protected:
     void msp_process_received_command();
     MSP::MSPCommandResult msp_process_command(MSP::msp_packet_t *cmd, MSP::msp_packet_t *reply);
     MSP::MSPCommandResult msp_process_sensor_command(uint16_t cmd_msp, MSP::sbuf_t *src);
-    MSP::MSPCommandResult msp_process_out_command(uint16_t cmd_msp, MSP::sbuf_t *dst);
+    MSP::MSPCommandResult msp_process_out_command(uint16_t cmd_msp, MSP::sbuf_t *src, MSP::sbuf_t *dst);
+
+#if AP_MSP_GHOST_DP_ENABLED
+    MSP::MSPCommandResult msp_process_ghost_dp(MSP::sbuf_t *src, MSP::sbuf_t *dst);
+#endif
 
     // MSP send
     void msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request);
