@@ -1,0 +1,54 @@
+# GHOST reduced ArduPlane profile for the MatekF405-Wing / MATEKF405SE.
+#
+# This profile is for a conventional fixed-wing aircraft without VTOL,
+# CAN peripherals, terrain following, or an airspeed sensor.  Apply it with:
+#
+#   ./waf configure --board MatekF405-Wing \
+#       --extra-hwdef=Tools/GHOST/matekf405-wing-reduced.hwdef
+
+# Native GHOST fields and mission transport over MSP DisplayPort.
+define AP_MSP_GHOST_DP_ENABLED 1
+
+# Conventional fixed-wing only.
+undef HAL_QUADPLANE_ENABLED
+define HAL_QUADPLANE_ENABLED 0
+undef QAUTOTUNE_ENABLED
+define QAUTOTUNE_ENABLED 0
+
+# No CAN bus or DroneCAN peripherals.
+undef HAL_CANMANAGER_ENABLED
+define HAL_CANMANAGER_ENABLED 0
+undef HAL_ENABLE_DRONECAN_DRIVERS
+define HAL_ENABLE_DRONECAN_DRIVERS 0
+
+# No terrain database or terrain-following support.
+undef AP_TERRAIN_AVAILABLE
+define AP_TERRAIN_AVAILABLE 0
+
+# No airspeed frontend or sensor backends.
+undef AP_AIRSPEED_ENABLED
+define AP_AIRSPEED_ENABLED 0
+undef AP_AIRSPEED_BACKEND_DEFAULT_ENABLED
+define AP_AIRSPEED_BACKEND_DEFAULT_ENABLED 0
+undef AP_AIRSPEED_ANALOG_ENABLED
+define AP_AIRSPEED_ANALOG_ENABLED 0
+undef AP_AIRSPEED_ASP5033_ENABLED
+define AP_AIRSPEED_ASP5033_ENABLED 0
+undef AP_AIRSPEED_DLVR_ENABLED
+define AP_AIRSPEED_DLVR_ENABLED 0
+undef AP_AIRSPEED_DRONECAN_ENABLED
+define AP_AIRSPEED_DRONECAN_ENABLED 0
+undef AP_AIRSPEED_MS4525_ENABLED
+define AP_AIRSPEED_MS4525_ENABLED 0
+undef AP_AIRSPEED_MS5525_ENABLED
+define AP_AIRSPEED_MS5525_ENABLED 0
+undef AP_AIRSPEED_MSP_ENABLED
+define AP_AIRSPEED_MSP_ENABLED 0
+undef AP_AIRSPEED_NMEA_ENABLED
+define AP_AIRSPEED_NMEA_ENABLED 0
+undef AP_AIRSPEED_SDP3X_ENABLED
+define AP_AIRSPEED_SDP3X_ENABLED 0
+undef AP_AIRSPEED_SITL_ENABLED
+define AP_AIRSPEED_SITL_ENABLED 0
+undef AP_AIRSPEED_AUAV_ENABLED
+define AP_AIRSPEED_AUAV_ENABLED 0
