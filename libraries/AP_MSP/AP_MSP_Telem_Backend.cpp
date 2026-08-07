@@ -479,6 +479,13 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_command(msp_packet_t *cmd, ms
 MSPCommandResult AP_MSP_Telem_Backend::msp_process_out_command(uint16_t cmd_msp, sbuf_t *src, sbuf_t *dst)
 {
     switch (cmd_msp) {
+#if AP_MSP_GHOST_DP_ENABLED
+    case MSP_DISPLAYPORT:
+        if (src != nullptr && sbuf_bytes_remaining(src) > 0 && src->ptr[0] == 0x80) {
+            return msp_process_ghost_dp(src, dst);
+        }
+        return MSP_RESULT_ERROR;
+#endif
     case MSP_API_VERSION:
         return msp_process_out_api_version(dst);
     case MSP_FC_VARIANT:
