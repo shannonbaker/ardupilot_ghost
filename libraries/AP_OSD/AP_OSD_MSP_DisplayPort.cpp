@@ -149,6 +149,11 @@ void AP_OSD_MSP_DisplayPort::flush(void)
     // ok done processing displayport data
     // let's process incoming MSP frames (and reply if needed)
     _displayport->process_incoming_data();
+
+    // DisplayPort owns this backend outside the generic MSP thread.  Service
+    // backend push traffic here as well; with GHOST disabled and the normal
+    // DisplayPort scheduler off this remains a no-op.
+    _displayport->process_outgoing_data();
 }
 
 void AP_OSD_MSP_DisplayPort::init_symbol_set(uint8_t *lookup_table, const uint8_t size)
