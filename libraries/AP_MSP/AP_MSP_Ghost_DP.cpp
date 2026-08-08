@@ -786,8 +786,10 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
             put_u8(&dst, uint8_t(entry.field->exponent));
             put_u16(&dst, entry.rate_hz);
         }
-        if (msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
-                            dst.ptr - payload, false) > 0) {
+        const uint16_t payload_len = dst.ptr - payload;
+        if (msp_ghost_dp_tx_ready(payload_len) &&
+            msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                            payload_len, false) > 0) {
             stream.map_pending = false;
         }
         return;
@@ -822,8 +824,10 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
         put_u8(&dst, sizes[i]);
         sbuf_write_data(&dst, values[i], sizes[i]);
     }
-    if (msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
-                        dst.ptr - payload, false) == 0) {
+    const uint16_t payload_len = dst.ptr - payload;
+    if (!msp_ghost_dp_tx_ready(payload_len) ||
+        msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                        payload_len, false) == 0) {
         return;
     }
     for (uint8_t i = 0; i < stream.count; i++) {

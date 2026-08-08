@@ -182,6 +182,9 @@ protected:
 
     // MSP send
     uint32_t msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request);
+#if AP_MSP_GHOST_DP_ENABLED
+    bool msp_ghost_dp_tx_ready(uint16_t payload_size) const;
+#endif
 
     // MSP sensor command processing
     void msp_handle_opflow(const MSP::msp_opflow_data_message_t &pkt);
