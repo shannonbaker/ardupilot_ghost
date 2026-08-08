@@ -419,6 +419,18 @@ uint32_t AP_MSP_Telem_Backend::msp_send_packet(uint16_t cmd, MSP::msp_version_e 
     return msp_serial_encode(&_msp_port, &pkt, msp_version, is_request);
 }
 
+#if AP_MSP_GHOST_DP_ENABLED
+bool AP_MSP_Telem_Backend::msp_ghost_dp_tx_ready(uint16_t payload_size) const
+{
+    // Native MSPv2 adds an 8-byte header and one CRC byte.  GHOST pushes are
+    // unsolicited, so unlike request responses they must never block waiting
+    // for UART TX space behind normal DisplayPort traffic.
+    static constexpr uint8_t MSP_V2_FRAME_OVERHEAD = 9;
+    return _msp_port.uart != nullptr &&
+           _msp_port.uart->txspace() >= uint32_t(payload_size) + MSP_V2_FRAME_OVERHEAD;
+}
+#endif
+
 /*
   ported from betaflight/src/main/msp/msp_serial.c
  */
