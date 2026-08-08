@@ -99,6 +99,9 @@ bool AP_MSP_Telem_Backend::init_uart()
 
 void AP_MSP_Telem_Backend::process_outgoing_data()
 {
+#if AP_MSP_GHOST_DP_ENABLED
+    msp_process_ghost_dp_outgoing();
+#endif
     if (is_scheduler_enabled()) {
         AP_RCTelemetry::run_wfq_scheduler();
     }

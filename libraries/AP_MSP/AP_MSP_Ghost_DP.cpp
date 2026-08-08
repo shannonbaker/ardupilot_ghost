@@ -14,6 +14,9 @@
 #include "msp_protocol.h"
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_AHRS/AP_AHRS.h>
+#include <AP_BattMonitor/AP_BattMonitor.h>
+#include <AP_GPS/AP_GPS.h>
 #include <AP_Mission/AP_Mission.h>
 
 using namespace MSP;
@@ -25,14 +28,28 @@ namespace {
 constexpr uint8_t GHOST_SUBCOMMAND = 0x80;
 constexpr uint8_t GHOST_VERSION = 0x10;
 constexpr uint8_t ENDPOINT_FC = 1;
+constexpr uint8_t ENDPOINT_VRX = 2;
+constexpr uint8_t FLAG_REQUEST = 1U << 0;
 constexpr uint8_t FLAG_RESPONSE = 1U << 1;
 constexpr uint8_t FLAG_ERROR = 1U << 3;
+constexpr uint8_t FLAG_VOLATILE = 1U << 4;
+constexpr uint8_t MAX_SLOTS = 22;
+constexpr uint32_t MAX_STREAM_BPS = 115200;
+constexpr uint8_t DEFAULT_LEASE_SECONDS = 5;
 
 enum Message : uint8_t {
     HELLO_REQUEST = 0x01,
     HELLO_RESPONSE = 0x02,
     CATALOG_REQUEST = 0x03,
     CATALOG_RESPONSE = 0x04,
+    SUBSCRIPTION_QUOTE = 0x10,
+    SUBSCRIPTION_QUOTE_RESULT = 0x11,
+    SUBSCRIPTION_COMMIT = 0x12,
+    SUBSCRIPTION_RESULT = 0x13,
+    SUBSCRIPTION_RENEW = 0x14,
+    SUBSCRIPTION_RELEASE = 0x15,
+    STREAM_MAP = 0x20,
+    FIELD_DATA = 0x21,
     MISSION_INFO_REQUEST = 0x30,
     MISSION_INFO_RESPONSE = 0x31,
     MISSION_ITEM_REQUEST = 0x32,
@@ -45,6 +62,13 @@ enum Status : uint8_t {
     UNSUPPORTED_VERSION = 2,
     UNSUPPORTED_MESSAGE = 3,
     INVALID_SESSION = 4,
+    INVALID_TRANSACTION = 5,
+    UNSUPPORTED_FIELD = 7,
+    INVALID_INSTANCE = 8,
+    INVALID_RATE = 10,
+    RATE_LIMITED = 11,
+    BANDWIDTH_EXCEEDED = 12,
+    TOO_MANY_FIELDS = 13,
     INVALID_MISSION = 22,
 };
 
@@ -123,6 +147,48 @@ const Field fields[] = {
 };
 #undef RC_FIELD
 
+struct QuoteEntry {
+    uint8_t request_index;
+    const Field *field;
+    uint8_t instance;
+    uint16_t rate_hz;
+    uint8_t status;
+};
+
+struct QuoteState {
+    bool valid;
+    uint16_t revision;
+    uint32_t token;
+    uint32_t estimated_bps;
+    uint32_t expires_ms;
+    uint8_t lease_seconds;
+    uint8_t count;
+    QuoteEntry entries[MAX_SLOTS];
+};
+
+struct StreamEntry {
+    const Field *field;
+    uint8_t instance;
+    uint16_t rate_hz;
+    uint32_t next_due_us;
+};
+
+struct StreamState {
+    bool active;
+    bool map_pending;
+    uint16_t generation;
+    uint16_t map_exchange;
+    uint16_t push_exchange;
+    uint32_t expires_ms;
+    uint32_t effective_bps;
+    uint8_t lease_seconds;
+    uint8_t count;
+    StreamEntry entries[MAX_SLOTS];
+};
+
+QuoteState quote;
+StreamState stream;
+
 uint16_t session_id;
 uint32_t boot_id;
 uint32_t catalog_hash;
@@ -143,6 +209,13 @@ bool read_u16(sbuf_t *src, uint16_t &v)
     uint8_t b[2];
     if (!take(src, b, sizeof(b))) { return false; }
     v = uint16_t(b[0]) | uint16_t(b[1]) << 8;
+    return true;
+}
+bool read_u32(sbuf_t *src, uint32_t &v)
+{
+    uint8_t b[4];
+    if (!take(src, b, sizeof(b))) { return false; }
+    v = uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 24;
     return true;
 }
 
@@ -191,6 +264,79 @@ uint32_t get_catalog_hash()
     return catalog_hash;
 }
 
+const Field *find_field(uint16_t id)
+{
+    for (const Field &field : fields) {
+        if (field.id == id) { return &field; }
+    }
+    return nullptr;
+}
+
+uint8_t value_size(uint8_t type)
+{
+    switch (type) {
+    case VALUE_U8:
+    case VALUE_BOOL: return 1;
+    case VALUE_U16:
+    case VALUE_I16: return 2;
+    case VALUE_U32:
+    case VALUE_I32: return 4;
+    default: return 0;
+    }
+}
+
+uint8_t clamp_lease(uint8_t requested)
+{
+    if (requested == 0) { return DEFAULT_LEASE_SECONDS; }
+    if (requested < 2) { return 2; }
+    if (requested > 30) { return 30; }
+    return requested;
+}
+
+uint16_t next_generation()
+{
+    if (++stream.generation == 0) { ++stream.generation; }
+    return stream.generation;
+}
+
+uint16_t next_push_exchange()
+{
+    if (++stream.push_exchange == 0) { ++stream.push_exchange; }
+    return stream.push_exchange;
+}
+
+uint32_t quote_token(uint16_t revision, uint16_t exchange)
+{
+    uint32_t hash = 2166136261U;
+    hash_u16(hash, session_id);
+    hash_u16(hash, revision);
+    hash_u16(hash, exchange);
+    hash = fnv_byte(hash, quote.lease_seconds);
+    for (uint8_t i = 0; i < quote.count; i++) {
+        const QuoteEntry &entry = quote.entries[i];
+        hash = fnv_byte(hash, entry.request_index);
+        hash_u16(hash, entry.field == nullptr ? 0 : entry.field->id);
+        hash = fnv_byte(hash, entry.instance);
+        hash_u16(hash, entry.rate_hz);
+        hash = fnv_byte(hash, entry.status);
+    }
+    return hash == 0 ? 1 : hash;
+}
+
+void expire_stream()
+{
+    const uint32_t now = AP_HAL::millis();
+    if (stream.active && int32_t(now - stream.expires_ms) >= 0) {
+        stream.active = false;
+        stream.count = 0;
+        stream.effective_bps = 0;
+        stream.lease_seconds = 0;
+    }
+    if (quote.valid && int32_t(now - quote.expires_ms) >= 0) {
+        quote.valid = false;
+    }
+}
+
 struct Header {
     uint8_t version;
     uint8_t message;
@@ -221,6 +367,18 @@ void write_header(sbuf_t *dst, const Header &request, uint8_t message, Status st
     put_u8(dst, request.source);
     put_u16(dst, session_id);
     put_u16(dst, request.exchange);
+}
+
+void write_push_header(sbuf_t *dst, uint8_t message, uint16_t exchange)
+{
+    put_u8(dst, GHOST_SUBCOMMAND);
+    put_u8(dst, GHOST_VERSION);
+    put_u8(dst, message);
+    put_u8(dst, 0);
+    put_u8(dst, ENDPOINT_FC);
+    put_u8(dst, ENDPOINT_VRX);
+    put_u16(dst, session_id);
+    put_u16(dst, exchange);
 }
 
 uint32_t mission_hash(AP_Mission *mission)
@@ -260,6 +418,49 @@ void put_float(sbuf_t *dst, float value)
     put_u32(dst, bits);
 }
 
+uint8_t sample_field(const Field &field, uint8_t *value, uint8_t &flags)
+{
+    uint32_t raw = 0;
+    bool valid = true;
+    AP_AHRS &ahrs = AP::ahrs();
+    AP_Mission *mission = AP::mission();
+
+    switch (field.id) {
+    case 1: raw = uint16_t(ahrs.pitch_sensor / 10); break;
+    case 2: raw = uint16_t(ahrs.roll_sensor / 10); break;
+    case 3: raw = uint16_t(ahrs.yaw_sensor / 10); break;
+#if AP_GPS_ENABLED
+    case 4: raw = uint32_t(AP::gps().location().lat); valid = AP::gps().status() >= AP_GPS_FixType::FIX_2D; break;
+    case 5: raw = uint32_t(AP::gps().location().lng); valid = AP::gps().status() >= AP_GPS_FixType::FIX_2D; break;
+    case 6: raw = uint32_t(AP::gps().location().alt); valid = AP::gps().status() >= AP_GPS_FixType::FIX_2D; break;
+    case 7: raw = uint16_t(MAX(0, int32_t(AP::gps().ground_speed() * 100.0f))); valid = AP::gps().status() >= AP_GPS_FixType::FIX_2D; break;
+    case 11: raw = AP::gps().num_sats(); break;
+    case 14: raw = AP::gps().status() >= AP_GPS_FixType::FIX_2D; break;
+#endif
+    case 13: raw = 1; break;
+    case 15: raw = ahrs.home_is_set(); break;
+    case 27: raw = uint32_t(ahrs.get_home().lat); valid = ahrs.home_is_set(); break;
+    case 28: raw = uint32_t(ahrs.get_home().lng); valid = ahrs.home_is_set(); break;
+    case 29: raw = mission == nullptr ? 0 : mission->get_current_nav_index(); valid = mission != nullptr; break;
+    case 30: raw = mission == nullptr ? 0 : uint8_t(mission->state()); valid = mission != nullptr; break;
+    case 50: raw = mission != nullptr && mission->state() == AP_Mission::MISSION_RUNNING; break;
+    default:
+        if (field.id >= 32 && field.id <= 47) {
+            const uint8_t channel = field.id - 32;
+            raw = hal.rcin->read(channel);
+            valid = channel < hal.rcin->num_channels();
+        } else {
+            valid = false;
+        }
+        break;
+    }
+
+    flags = valid ? 1U : 0U;
+    const uint8_t size = value_size(field.type);
+    for (uint8_t i = 0; i < size; i++) { value[i] = raw >> (8U * i); }
+    return size;
+}
+
 } // namespace
 
 MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t *dst)
@@ -277,6 +478,8 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
         }
         session_id++;
         if (session_id == 0) { session_id = 1; }
+        memset(&quote, 0, sizeof(quote));
+        memset(&stream, 0, sizeof(stream));
         write_header(dst, request, HELLO_RESPONSE, status);
         put_u8(dst, status);
         put_u32(dst, boot_id);
@@ -285,12 +488,12 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
         hal.util->get_system_id_unformatted(uid, uid_length);
         sbuf_write_data(dst, uid, sizeof(uid));
         put_u32(dst, get_catalog_hash());
-        // Catalogue plus canonical read-only MISSION_ITEM_INT and opaque IDs.
-        put_u32(dst, (1U << 0) | (1U << 11) | (1U << 12));
+        // Catalogue, volatile subscriptions, push streaming and mission reads.
+        put_u32(dst, (1U << 0) | (1U << 2) | (1U << 3) | (1U << 11) | (1U << 12));
         put_u16(dst, MSP_PORT_INBUF_SIZE);
-        put_u32(dst, 0); // Streaming is advertised when the subscription engine is enabled.
-        put_u8(dst, 0);
-        put_u8(dst, 5);
+        put_u32(dst, MAX_STREAM_BPS);
+        put_u8(dst, MAX_SLOTS);
+        put_u8(dst, DEFAULT_LEASE_SECONDS);
         return MSP_RESULT_ACK;
     }
 
@@ -337,6 +540,159 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
             next_ptr[0] = fields[index].id;
             next_ptr[1] = fields[index].id >> 8;
         }
+        return MSP_RESULT_ACK;
+    }
+
+    case SUBSCRIPTION_QUOTE: {
+        Status status = !version_ok ? UNSUPPORTED_VERSION :
+            (request.session != session_id ? INVALID_SESSION : OK);
+        memset(&quote, 0, sizeof(quote));
+        uint8_t requested_count = 0;
+        if (status == OK && (!read_u16(src, quote.revision) ||
+                            !read_u8(src, quote.lease_seconds) ||
+                            !read_u8(src, requested_count))) {
+            status = BAD_LENGTH;
+        }
+        quote.lease_seconds = clamp_lease(quote.lease_seconds);
+        if (status == OK && (requested_count == 0 || requested_count > MAX_SLOTS)) {
+            status = requested_count > MAX_SLOTS ? TOO_MANY_FIELDS : BAD_LENGTH;
+        }
+        quote.count = status == OK ? requested_count : 0;
+        uint32_t records_bps = 0;
+        uint16_t packet_hz = 0;
+        for (uint8_t i = 0; i < quote.count; i++) {
+            QuoteEntry &entry = quote.entries[i];
+            uint16_t field_id = 0, minimum_hz = 0, preferred_hz = 0;
+            uint8_t priority = 0, request_flags = 0;
+            if (!read_u8(src, entry.request_index) || !read_u16(src, field_id) ||
+                !read_u8(src, entry.instance) || !read_u16(src, minimum_hz) ||
+                !read_u16(src, preferred_hz) || !read_u8(src, priority) ||
+                !read_u8(src, request_flags)) {
+                status = BAD_LENGTH;
+                quote.count = 0;
+                break;
+            }
+            if (request_flags & 4U) {
+                uint8_t ignored_deadband = 0;
+                if (!read_u8(src, ignored_deadband)) {
+                    status = BAD_LENGTH;
+                    quote.count = 0;
+                    break;
+                }
+            }
+            entry.field = find_field(field_id);
+            entry.status = OK;
+            const bool required = (request_flags & 1U) != 0;
+            const bool optional = (request_flags & 2U) != 0;
+            if ((request_flags & ~7U) != 0 || required == optional) {
+                entry.status = INVALID_TRANSACTION;
+            } else if (entry.field == nullptr) {
+                entry.status = UNSUPPORTED_FIELD;
+            } else if (entry.instance != 0) {
+                entry.status = INVALID_INSTANCE;
+            } else if (minimum_hz == 0 || preferred_hz < minimum_hz ||
+                       minimum_hz > entry.field->maximum_rate) {
+                entry.status = INVALID_RATE;
+            } else {
+                entry.rate_hz = MIN(preferred_hz, entry.field->maximum_rate);
+                if (entry.rate_hz != preferred_hz) { entry.status = RATE_LIMITED; }
+                records_bps += (3U + value_size(entry.field->type)) * entry.rate_hz;
+                packet_hz = MAX(packet_hz, entry.rate_hz);
+            }
+            if (required && entry.status != OK && entry.status != RATE_LIMITED && status == OK) {
+                status = Status(entry.status);
+            }
+        }
+        if (status == OK && sbuf_bytes_remaining(src) != 0) { status = BAD_LENGTH; }
+        quote.estimated_bps = (records_bps + (22U * packet_hz)) * 8U;
+        if (status == OK && quote.estimated_bps > MAX_STREAM_BPS) { status = BANDWIDTH_EXCEEDED; }
+        if (status == OK) {
+            quote.token = quote_token(quote.revision, request.exchange);
+            quote.expires_ms = AP_HAL::millis() + 5000U;
+            quote.valid = true;
+        }
+        write_header(dst, request, SUBSCRIPTION_QUOTE_RESULT, status);
+        put_u8(dst, status);
+        put_u16(dst, quote.revision);
+        put_u32(dst, quote.valid ? quote.token : 0);
+        put_u32(dst, quote.estimated_bps);
+        put_u8(dst, quote.lease_seconds);
+        put_u8(dst, quote.count);
+        for (uint8_t i = 0; i < quote.count; i++) {
+            put_u8(dst, quote.entries[i].request_index);
+            put_u8(dst, quote.entries[i].status);
+            put_u16(dst, quote.entries[i].rate_hz);
+        }
+        return MSP_RESULT_ACK;
+    }
+
+    case SUBSCRIPTION_COMMIT: {
+        expire_stream();
+        Status status = !version_ok ? UNSUPPORTED_VERSION :
+            (request.session != session_id ? INVALID_SESSION : OK);
+        uint16_t revision = 0;
+        uint32_t token = 0;
+        if (status == OK && !(request.flags & FLAG_VOLATILE)) { status = INVALID_TRANSACTION; }
+        if (status == OK && (!read_u16(src, revision) || !read_u32(src, token) ||
+                            sbuf_bytes_remaining(src) != 0)) { status = BAD_LENGTH; }
+        if (status == OK && (!quote.valid || revision != quote.revision || token != quote.token)) {
+            status = INVALID_TRANSACTION;
+        }
+        if (status == OK) {
+            stream.active = true;
+            stream.count = quote.count;
+            stream.lease_seconds = quote.lease_seconds;
+            stream.effective_bps = quote.estimated_bps;
+            stream.expires_ms = AP_HAL::millis() + uint32_t(stream.lease_seconds) * 1000U;
+            stream.map_exchange = request.exchange;
+            stream.map_pending = true;
+            next_generation();
+            const uint32_t now_us = AP_HAL::micros();
+            for (uint8_t i = 0; i < stream.count; i++) {
+                stream.entries[i].field = quote.entries[i].field;
+                stream.entries[i].instance = quote.entries[i].instance;
+                stream.entries[i].rate_hz = quote.entries[i].rate_hz;
+                stream.entries[i].next_due_us = now_us;
+            }
+            quote.valid = false;
+        }
+        write_header(dst, request, SUBSCRIPTION_RESULT, status);
+        put_u8(dst, status);
+        put_u16(dst, stream.generation);
+        put_u8(dst, status == OK ? stream.lease_seconds : 0);
+        put_u32(dst, status == OK ? stream.effective_bps : 0);
+        return MSP_RESULT_ACK;
+    }
+
+    case SUBSCRIPTION_RENEW:
+    case SUBSCRIPTION_RELEASE: {
+        expire_stream();
+        Status status = !version_ok ? UNSUPPORTED_VERSION :
+            (request.session != session_id ? INVALID_SESSION : OK);
+        uint16_t generation = 0;
+        if (status == OK && !(request.flags & FLAG_VOLATILE)) { status = INVALID_TRANSACTION; }
+        if (status == OK && (!read_u16(src, generation) || sbuf_bytes_remaining(src) != 0)) {
+            status = BAD_LENGTH;
+        }
+        if (status == OK && (!stream.active || generation != stream.generation)) {
+            status = INVALID_TRANSACTION;
+        }
+        if (status == OK && request.message == SUBSCRIPTION_RENEW) {
+            stream.expires_ms = AP_HAL::millis() + uint32_t(stream.lease_seconds) * 1000U;
+        } else if (status == OK) {
+            stream.active = false;
+            stream.count = 0;
+            stream.effective_bps = 0;
+            stream.lease_seconds = 0;
+            stream.map_exchange = request.exchange;
+            stream.map_pending = true;
+            next_generation();
+        }
+        write_header(dst, request, SUBSCRIPTION_RESULT, status);
+        put_u8(dst, status);
+        put_u16(dst, stream.generation);
+        put_u8(dst, status == OK ? stream.lease_seconds : 0);
+        put_u32(dst, status == OK ? stream.effective_bps : 0);
         return MSP_RESULT_ACK;
     }
 
@@ -401,6 +757,73 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
         put_u8(dst, UNSUPPORTED_MESSAGE);
         return MSP_RESULT_ACK;
     }
+}
+
+void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
+{
+    expire_stream();
+    if (session_id == 0) { return; }
+
+    uint8_t payload[MSP_PORT_OUTBUF_SIZE] {};
+    sbuf_t dst { .ptr = payload, .end = payload + sizeof(payload) };
+
+    if (stream.map_pending) {
+        write_push_header(&dst, STREAM_MAP, stream.map_exchange);
+        put_u16(&dst, stream.generation);
+        put_u8(&dst, 0);
+        put_u8(&dst, 1);
+        put_u8(&dst, stream.count);
+        for (uint8_t i = 0; i < stream.count; i++) {
+            const StreamEntry &entry = stream.entries[i];
+            put_u8(&dst, i);
+            put_u16(&dst, entry.field->id);
+            put_u8(&dst, entry.instance);
+            put_u8(&dst, entry.field->type);
+            put_u8(&dst, entry.field->unit);
+            put_u8(&dst, uint8_t(entry.field->exponent));
+            put_u16(&dst, entry.rate_hz);
+        }
+        msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                        dst.ptr - payload, false);
+        stream.map_pending = false;
+        return;
+    }
+    if (!stream.active) { return; }
+
+    const uint32_t now_us = AP_HAL::micros();
+    uint8_t values[MAX_SLOTS][4] {};
+    uint8_t sizes[MAX_SLOTS] {};
+    uint8_t flags[MAX_SLOTS] {};
+    bool due[MAX_SLOTS] {};
+    uint8_t due_count = 0;
+    uint16_t payload_size = 13;
+    for (uint8_t i = 0; i < stream.count; i++) {
+        StreamEntry &entry = stream.entries[i];
+        if (entry.rate_hz == 0 || int32_t(now_us - entry.next_due_us) < 0) { continue; }
+        sizes[i] = sample_field(*entry.field, values[i], flags[i]);
+        if (sizes[i] == 0 || payload_size + 3U + sizes[i] > sizeof(payload)) { continue; }
+        due[i] = true;
+        due_count++;
+        payload_size += 3U + sizes[i];
+    }
+    if (due_count == 0) { return; }
+
+    write_push_header(&dst, FIELD_DATA, next_push_exchange());
+    put_u16(&dst, stream.generation);
+    put_u8(&dst, due_count);
+    for (uint8_t i = 0; i < stream.count; i++) {
+        if (!due[i]) { continue; }
+        StreamEntry &entry = stream.entries[i];
+        put_u8(&dst, i);
+        put_u8(&dst, flags[i]);
+        put_u8(&dst, sizes[i]);
+        sbuf_write_data(&dst, values[i], sizes[i]);
+        const uint32_t interval = 1000000U / entry.rate_hz;
+        do { entry.next_due_us += interval; }
+        while (int32_t(now_us - entry.next_due_us) >= 0);
+    }
+    msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                    dst.ptr - payload, false);
 }
 
 #endif // AP_MSP_GHOST_DP_ENABLED
