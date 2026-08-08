@@ -174,6 +174,7 @@ struct StreamEntry {
 };
 
 struct StreamState {
+    AP_MSP_Telem_Backend *backend;
     bool active;
     bool map_pending;
     uint16_t generation;
@@ -640,6 +641,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
             status = INVALID_TRANSACTION;
         }
         if (status == OK) {
+            stream.backend = this;
             stream.active = true;
             stream.count = quote.count;
             stream.lease_seconds = quote.lease_seconds;
@@ -656,11 +658,6 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                 stream.entries[i].next_due_us = now_us;
             }
             quote.valid = false;
-            // Send the map on the backend that accepted this transaction.
-            // The client explicitly caches an early STREAM_MAP while waiting
-            // for SUBSCRIPTION_RESULT.  This also avoids relying on a later
-            // scheduler pass to select the same MSP backend.
-            msp_process_ghost_dp_outgoing();
         }
         write_header(dst, request, SUBSCRIPTION_RESULT, status);
         put_u8(dst, status);
@@ -768,7 +765,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
 void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
 {
     expire_stream();
-    if (session_id == 0) { return; }
+    if (session_id == 0 || stream.backend != this) { return; }
 
     uint8_t payload[MSP_PORT_OUTBUF_SIZE] {};
     sbuf_t dst { .ptr = payload, .end = payload + sizeof(payload) };
