@@ -656,6 +656,11 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                 stream.entries[i].next_due_us = now_us;
             }
             quote.valid = false;
+            // Send the map on the backend that accepted this transaction.
+            // The client explicitly caches an early STREAM_MAP while waiting
+            // for SUBSCRIPTION_RESULT.  This also avoids relying on a later
+            // scheduler pass to select the same MSP backend.
+            msp_process_ghost_dp_outgoing();
         }
         write_header(dst, request, SUBSCRIPTION_RESULT, status);
         put_u8(dst, status);
