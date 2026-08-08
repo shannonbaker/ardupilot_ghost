@@ -177,6 +177,7 @@ protected:
 
 #if AP_MSP_GHOST_DP_ENABLED
     MSP::MSPCommandResult msp_process_ghost_dp(MSP::sbuf_t *src, MSP::sbuf_t *dst);
+    void msp_process_ghost_dp_outgoing();
 #endif
 
     // MSP send
