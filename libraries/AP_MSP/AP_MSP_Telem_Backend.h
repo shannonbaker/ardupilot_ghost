@@ -213,7 +213,7 @@ protected:
 #endif
 
     // MSP send
-    void msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request);
+    uint32_t msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request);
 
     // MSP sensor command processing
     void msp_handle_opflow(const MSP::msp_opflow_data_message_t &pkt);

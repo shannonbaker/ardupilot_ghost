@@ -784,9 +784,10 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
             put_u8(&dst, uint8_t(entry.field->exponent));
             put_u16(&dst, entry.rate_hz);
         }
-        msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
-                        dst.ptr - payload, false);
-        stream.map_pending = false;
+        if (msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                            dst.ptr - payload, false) > 0) {
+            stream.map_pending = false;
+        }
         return;
     }
     if (!stream.active) { return; }
@@ -814,17 +815,22 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
     put_u8(&dst, due_count);
     for (uint8_t i = 0; i < stream.count; i++) {
         if (!due[i]) { continue; }
-        StreamEntry &entry = stream.entries[i];
         put_u8(&dst, i);
         put_u8(&dst, flags[i]);
         put_u8(&dst, sizes[i]);
         sbuf_write_data(&dst, values[i], sizes[i]);
+    }
+    if (msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
+                        dst.ptr - payload, false) == 0) {
+        return;
+    }
+    for (uint8_t i = 0; i < stream.count; i++) {
+        if (!due[i]) { continue; }
+        StreamEntry &entry = stream.entries[i];
         const uint32_t interval = 1000000U / entry.rate_hz;
         do { entry.next_due_us += interval; }
         while (int32_t(now_us - entry.next_due_us) >= 0);
     }
-    msp_send_packet(MSP_DISPLAYPORT, MSP_V2_NATIVE, payload,
-                    dst.ptr - payload, false);
 }
 
 #endif // AP_MSP_GHOST_DP_ENABLED

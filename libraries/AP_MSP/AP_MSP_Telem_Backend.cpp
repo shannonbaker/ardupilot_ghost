@@ -403,7 +403,7 @@ void AP_MSP_Telem_Backend::process_incoming_data()
 /*
   send an MSP packet
  */
-void AP_MSP_Telem_Backend::msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request)
+uint32_t AP_MSP_Telem_Backend::msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_version, const void *p, uint16_t size, bool is_request)
 {
     uint8_t out_buf[MSP_PORT_OUTBUF_SIZE];
 
@@ -416,7 +416,7 @@ void AP_MSP_Telem_Backend::msp_send_packet(uint16_t cmd, MSP::msp_version_e msp_
 
     sbuf_write_data(&pkt.buf, p, size);
     sbuf_switch_to_reader(&pkt.buf, &out_buf[0]);
-    msp_serial_encode(&_msp_port, &pkt, msp_version, is_request);
+    return msp_serial_encode(&_msp_port, &pkt, msp_version, is_request);
 }
 
 /*
