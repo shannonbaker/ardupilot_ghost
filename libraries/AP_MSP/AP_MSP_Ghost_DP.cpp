@@ -89,6 +89,7 @@ enum Unit : uint8_t {
     UNIT_VOLT = 4,
     UNIT_AMPERE = 5,
     UNIT_AMPERE_HOUR = 6,
+    UNIT_SECOND = 7,
     UNIT_PERCENT = 8,
     UNIT_COUNT = 10,
     UNIT_DEGREES_PER_SECOND = 11,
@@ -109,7 +110,7 @@ struct Field {
     const char *name;
 };
 
-#define RC_FIELD(n, id) { id, VALUE_U16, UNIT_NONE, 0, FIELD_INVALID, 50, 50, "RC" #n }
+#define RC_FIELD(n, id) { id, VALUE_U16, UNIT_SECOND, -6, FIELD_INVALID, 50, 50, "RC" #n }
 const Field fields[] = {
     { 1, VALUE_I16, UNIT_DEGREE, -1, FIELD_SIGNED, 100, 100, "PITCH" },
     { 2, VALUE_I16, UNIT_DEGREE, -1, FIELD_SIGNED, 100, 100, "ROLL" },
