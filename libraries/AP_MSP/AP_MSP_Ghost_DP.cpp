@@ -424,7 +424,7 @@ uint8_t sample_field(const Field &field, uint8_t *value, uint8_t &flags)
     uint32_t raw = 0;
     bool valid = true;
     AP_AHRS &ahrs = AP::ahrs();
-    AP_Mission *mission = AP::mission();
+    AP_Mission *mission = &AP::mission();
 
     switch (field.id) {
     case 1: raw = uint16_t(ahrs.pitch_sensor / 10); break;
@@ -707,7 +707,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                             sbuf_bytes_remaining(src) != 0)) {
             status = BAD_LENGTH;
         }
-        AP_Mission *mission = AP::mission();
+        AP_Mission *mission = &AP::mission();
         const uint32_t hash = mission_hash(mission);
         if (status == OK && (mission == nullptr || hash == 0)) { status = INVALID_MISSION; }
         write_header(dst, request, MISSION_INFO_RESPONSE, status);
@@ -729,7 +729,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                             mission_type != 0 || sbuf_bytes_remaining(src) != 0)) {
             status = BAD_LENGTH;
         }
-        AP_Mission *mission = AP::mission();
+        AP_Mission *mission = &AP::mission();
         AP_Mission::Mission_Command command {};
         mavlink_mission_item_int_t item {};
         const uint32_t hash = mission_hash(mission);
