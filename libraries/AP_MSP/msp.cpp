@@ -33,7 +33,7 @@ uint32_t MSP::msp_serial_send_frame(msp_port_t *msp, const uint8_t * hdr, uint32
     //  b) Response fits into TX buffer
     const uint32_t total_frame_length = hdr_len + data_len + crc_len;
 
-    if (msp->uart->tx_pending() && (msp->uart->txspace() < total_frame_length)) {
+    if (!msp->uart->tx_pending() && (msp->uart->txspace() < total_frame_length)) {
         return 0;
     }
 
