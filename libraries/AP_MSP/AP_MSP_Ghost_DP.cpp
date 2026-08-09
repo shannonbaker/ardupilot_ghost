@@ -524,9 +524,10 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
         hal.util->get_system_id_unformatted(uid, uid_length);
         sbuf_write_data(dst, uid, sizeof(uid));
         put_u32(dst, get_catalog_hash());
-        // Catalogue, volatile subscriptions, push streaming and mission reads.
+        // Catalogue, volatile subscriptions, push streaming, change deadbands
+        // and mission reads.
         put_u32(dst, (1U << 0) | (1U << 2) | (1U << 3) | (1U << 4) |
-                       (1U << 5) | (1U << 11) | (1U << 12));
+                       (1U << 5) | (1U << 10) | (1U << 11) | (1U << 12));
         put_u16(dst, MSP_PORT_INBUF_SIZE);
         put_u32(dst, MAX_STREAM_BPS);
         put_u8(dst, MAX_SLOTS);
