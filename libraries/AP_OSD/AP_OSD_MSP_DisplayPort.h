@@ -33,6 +33,11 @@ public:
     // used to initialize the uart in the correct thread
     void osd_thread_run_once() override;
 
+#if AP_MSP_GHOST_DP_ENABLED
+    // service GHOST control and field traffic without redrawing the OSD
+    void osd_thread_service() override;
+#endif
+
     // return a correction factor used to display angles correctly
     float get_aspect_ratio_correction() const override;
     

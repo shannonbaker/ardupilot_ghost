@@ -402,8 +402,25 @@ void AP_OSD::osd_thread()
     }
 
 
+#if AP_MSP_GHOST_DP_ENABLED
+    uint8_t osd_tick = 0;
+#endif
     while (true) {
+#if AP_MSP_GHOST_DP_ENABLED
+        // Service GHOST at 100 Hz while retaining the full character OSD
+        // render cadence at 10 Hz. This keeps all DisplayPort UART access on
+        // its existing owner thread.
+        hal.scheduler->delay(10);
+        for (uint8_t instance = 0; instance < _backend_count; instance++) {
+            _backends[instance]->osd_thread_service();
+        }
+        if (++osd_tick < 10) {
+            continue;
+        }
+        osd_tick = 0;
+#else
         hal.scheduler->delay(100);
+#endif
         if (!_disable) {
             update_stats();
             update_current_screen();

@@ -61,6 +61,11 @@ public:
     // called by the OSD thread once
     virtual void osd_thread_run_once() { return; }
 
+#if AP_MSP_GHOST_DP_ENABLED
+    // lightweight service hook called between full OSD redraws
+    virtual void osd_thread_service() { return; }
+#endif
+
 #if OSD_ENABLED && AP_SCRIPTING_ENABLED
     // passthrough OSD functions for use by scripting
     bool display_disabled() const { return _osd.display_disabled(); }

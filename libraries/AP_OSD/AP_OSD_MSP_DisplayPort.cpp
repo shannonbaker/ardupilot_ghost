@@ -146,14 +146,21 @@ void AP_OSD_MSP_DisplayPort::flush(void)
     _displayport->msp_displayport_grab();
     _displayport->msp_displayport_draw_screen();
 
-    // ok done processing displayport data
-    // let's process incoming MSP frames (and reply if needed)
+#if !AP_MSP_GHOST_DP_ENABLED
+    // Process control and telemetry at the normal OSD cadence when the
+    // high-rate GHOST service hook is not compiled in.
     _displayport->process_incoming_data();
-    // DisplayPort owns this backend outside the generic MSP thread.  Service
-    // backend push traffic here as well; with GHOST disabled and the normal
-    // DisplayPort scheduler off this remains a no-op.
+    _displayport->process_outgoing_data();
+#endif
+}
+
+#if AP_MSP_GHOST_DP_ENABLED
+void AP_OSD_MSP_DisplayPort::osd_thread_service()
+{
+    _displayport->process_incoming_data();
     _displayport->process_outgoing_data();
 }
+#endif
 
 void AP_OSD_MSP_DisplayPort::init_symbol_set(uint8_t *lookup_table, const uint8_t size)
 {
