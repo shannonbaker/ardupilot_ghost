@@ -767,7 +767,12 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
     expire_stream();
     if (session_id == 0 || stream.backend != this) { return; }
 
-    uint8_t payload[MSP_PORT_OUTBUF_SIZE] {};
+    // The DisplayPort OSD thread has a 1280-byte stack. msp_send_packet()
+    // already uses a 512-byte encoding buffer, so keeping another 512-byte
+    // payload here can overflow that thread when the calls are nested.
+    // GHOST stream state is single-owner, making one static staging buffer
+    // sufficient and keeping it out of the constrained OSD stack.
+    static uint8_t payload[MSP_PORT_OUTBUF_SIZE];
     sbuf_t dst { .ptr = payload, .end = payload + sizeof(payload) };
 
     if (stream.map_pending) {
