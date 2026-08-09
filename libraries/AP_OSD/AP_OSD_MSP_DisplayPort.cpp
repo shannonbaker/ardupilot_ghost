@@ -62,6 +62,13 @@ void AP_OSD_MSP_DisplayPort::osd_thread_run_once()
 
 void AP_OSD_MSP_DisplayPort::clear(void)
 {
+#if AP_MSP_GHOST_DP_ENABLED
+    // Give GHOST control traffic (especially lease renewals) first use of the
+    // UART queue.  At flush time the character OSD frame may have consumed all
+    // available TX space, causing an otherwise valid response to be deferred.
+    _displayport->process_incoming_data();
+#endif
+
     // check if we need to enable some options
     // but only for actual OSD screens
     if (_osd.get_current_screen() < AP_OSD_NUM_DISPLAY_SCREENS) {
