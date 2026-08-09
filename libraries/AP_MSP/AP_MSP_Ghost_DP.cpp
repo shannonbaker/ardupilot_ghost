@@ -152,6 +152,7 @@ struct QuoteEntry {
     const Field *field;
     uint8_t instance;
     uint16_t rate_hz;
+    uint8_t deadband_raw;
     uint8_t status;
 };
 
@@ -171,6 +172,12 @@ struct StreamEntry {
     uint8_t instance;
     uint16_t rate_hz;
     uint32_t next_due_us;
+    uint32_t last_sent_us;
+    uint8_t last_value[4];
+    uint8_t last_size;
+    uint8_t last_flags;
+    uint8_t deadband_raw;
+    bool has_last_value;
 };
 
 struct StreamState {
@@ -286,6 +293,33 @@ uint8_t value_size(uint8_t type)
     }
 }
 
+int64_t integer_value(uint8_t type, const uint8_t *value)
+{
+    const uint32_t raw = uint32_t(value[0]) |
+        (type == VALUE_U8 || type == VALUE_BOOL ? 0U : uint32_t(value[1]) << 8) |
+        (type == VALUE_U32 || type == VALUE_I32 ?
+            (uint32_t(value[2]) << 16 | uint32_t(value[3]) << 24) : 0U);
+    switch (type) {
+    case VALUE_I16: return int16_t(raw);
+    case VALUE_I32: return int32_t(raw);
+    default: return raw;
+    }
+}
+
+bool changed_by_deadband(const StreamEntry &entry, const uint8_t *value,
+                         uint8_t size, uint8_t flags)
+{
+    if (!entry.has_last_value || entry.deadband_raw == 0 ||
+        size != entry.last_size || flags != entry.last_flags) {
+        return true;
+    }
+    const int64_t current = integer_value(entry.field->type, value);
+    const int64_t previous = integer_value(entry.field->type, entry.last_value);
+    const uint64_t difference = current >= previous ?
+        uint64_t(current - previous) : uint64_t(previous - current);
+    return difference >= entry.deadband_raw;
+}
+
 uint8_t clamp_lease(uint8_t requested)
 {
     if (requested == 0) { return DEFAULT_LEASE_SECONDS; }
@@ -319,6 +353,7 @@ uint32_t quote_token(uint16_t revision, uint16_t exchange)
         hash_u16(hash, entry.field == nullptr ? 0 : entry.field->id);
         hash = fnv_byte(hash, entry.instance);
         hash_u16(hash, entry.rate_hz);
+        hash = fnv_byte(hash, entry.deadband_raw);
         hash = fnv_byte(hash, entry.status);
     }
     return hash == 0 ? 1 : hash;
@@ -575,8 +610,7 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                 break;
             }
             if (request_flags & 4U) {
-                uint8_t ignored_deadband = 0;
-                if (!read_u8(src, ignored_deadband)) {
+                if (!read_u8(src, entry.deadband_raw)) {
                     status = BAD_LENGTH;
                     quote.count = 0;
                     break;
@@ -655,7 +689,14 @@ MSPCommandResult AP_MSP_Telem_Backend::msp_process_ghost_dp(sbuf_t *src, sbuf_t 
                 stream.entries[i].field = quote.entries[i].field;
                 stream.entries[i].instance = quote.entries[i].instance;
                 stream.entries[i].rate_hz = quote.entries[i].rate_hz;
+                stream.entries[i].deadband_raw = quote.entries[i].deadband_raw;
                 stream.entries[i].next_due_us = now_us;
+                stream.entries[i].last_sent_us = 0;
+                stream.entries[i].last_size = 0;
+                stream.entries[i].last_flags = 0;
+                stream.entries[i].has_last_value = false;
+                memset(stream.entries[i].last_value, 0,
+                       sizeof(stream.entries[i].last_value));
             }
             quote.valid = false;
         }
@@ -806,16 +847,30 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
     uint8_t sizes[MAX_SLOTS] {};
     uint8_t flags[MAX_SLOTS] {};
     bool due[MAX_SLOTS] {};
+    bool evaluated[MAX_SLOTS] {};
     uint8_t due_count = 0;
     uint16_t payload_size = 13;
     for (uint8_t i = 0; i < stream.count; i++) {
         StreamEntry &entry = stream.entries[i];
         if (entry.rate_hz == 0 || int32_t(now_us - entry.next_due_us) < 0) { continue; }
+        evaluated[i] = true;
         sizes[i] = sample_field(*entry.field, values[i], flags[i]);
-        if (sizes[i] == 0 || payload_size + 3U + sizes[i] > sizeof(payload)) { continue; }
+        if (sizes[i] == 0) { continue; }
+        const bool keepalive_due = entry.has_last_value &&
+            uint32_t(now_us - entry.last_sent_us) >= 1000000U;
+        if (!keepalive_due &&
+            !changed_by_deadband(entry, values[i], sizes[i], flags[i])) { continue; }
+        if (payload_size + 3U + sizes[i] > sizeof(payload)) { continue; }
         due[i] = true;
         due_count++;
         payload_size += 3U + sizes[i];
+    }
+    for (uint8_t i = 0; i < stream.count; i++) {
+        if (!evaluated[i]) { continue; }
+        StreamEntry &entry = stream.entries[i];
+        const uint32_t interval = 1000000U / entry.rate_hz;
+        do { entry.next_due_us += interval; }
+        while (int32_t(now_us - entry.next_due_us) >= 0);
     }
     if (due_count == 0) { return; }
 
@@ -838,9 +893,11 @@ void AP_MSP_Telem_Backend::msp_process_ghost_dp_outgoing()
     for (uint8_t i = 0; i < stream.count; i++) {
         if (!due[i]) { continue; }
         StreamEntry &entry = stream.entries[i];
-        const uint32_t interval = 1000000U / entry.rate_hz;
-        do { entry.next_due_us += interval; }
-        while (int32_t(now_us - entry.next_due_us) >= 0);
+        memcpy(entry.last_value, values[i], sizes[i]);
+        entry.last_size = sizes[i];
+        entry.last_flags = flags[i];
+        entry.last_sent_us = now_us;
+        entry.has_last_value = true;
     }
 }
 
